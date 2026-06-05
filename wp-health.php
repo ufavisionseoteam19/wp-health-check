@@ -132,8 +132,8 @@ function get_theme_template($dir) {
     $head = @file_get_contents($css, false, null, 0, 8192);
     if ($head === false) return null;
     if (stripos($head, 'Theme Name:') === false) return null;
-    // หาบรรทัด Template: xxx (รองรับ * หรือช่องว่างนำหน้าในคอมเมนต์ /** */)
-    if (preg_match('/^[\s*]*Template:\s*(.+)$/mi', $head, $m)) {
+    // หาบรรทัด Template: xxx
+    if (preg_match('/^\s*Template:\s*(.+)$/mi', $head, $m)) {
         return trim($m[1]);
     }
     return null; // มี Theme Name แต่ไม่มี Template = ไม่ใช่ child theme
@@ -219,7 +219,7 @@ if (count($wpcontent_dirs) === 0) {
 // ====== ตัวนับสรุป (แยกตามชนิด) ======
 $counters = [
     'plugin' => ['empty' => [], 'nohdr' => [], 'suspect' => [], 'total' => 0],
-    'theme'  => ['incomplete' => [], 'total' => 0],
+    'theme'  => ['empty' => [], 'nohdr' => [], 'suspect' => [], 'orphan' => [], 'total' => 0],
 ];
 
 // ====== วนแต่ละเว็บ ======
@@ -227,105 +227,69 @@ foreach ($wpcontent_dirs as $wpc) {
     $site = preg_replace('#/wp-content$#', '', $wpc);
     $site_has_output = false;
 
-    // ---------- PLUGINS (ตรรกะเดิม: นับไฟล์ครบทุกแบบ) ----------
-    if ($DO_PLUGINS) {
-        $container = "$wpc/plugins";
-        if (is_dir($container)) {
-            $entries = glob("$container/*", GLOB_ONLYDIR);
-            if ($entries) {
-                sort($entries);
-                $rows = [];
-                foreach ($entries as $d) {
-                    $name = basename($d);
-                    if (in_array($name, $EXCLUDE, true)) {
-                        if (!$AS_CSV && !$ONLY_ISSUES) $rows[] = ['ข้าม', '-', '-', $name];
-                        continue;
-                    }
-                    $counters['plugin']['total']++;
-                    $fcount = count_files($d);
-                    $bytes  = dir_size($d);
-                    $size   = human_size($bytes);
+    foreach ($types as $subdir => $type) {
+        $container = "$wpc/$subdir";
+        if (!is_dir($container)) continue;
+        $entries = glob("$container/*", GLOB_ONLYDIR);
+        if (!$entries) continue;
+        sort($entries);
 
-                    if ($fcount === 0) {
-                        $status = 'ว่าง!';
-                        $counters['plugin']['empty'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
-                    } elseif ($fcount <= $THRESHOLD) {
-                        $status = 'สงสัย';
-                        $counters['plugin']['suspect'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
-                    } elseif (!has_main_header($d, 'plugin')) {
-                        $status = 'ไม่มีหลัก';
-                        $counters['plugin']['nohdr'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
-                    } else {
-                        $status = 'ปกติ';
-                    }
-
-                    if ($AS_CSV) {
-                        echo "\"$site\",plugin,\"$name\",$fcount,$bytes,$status\n";
-                    } else {
-                        if ($ONLY_ISSUES && $status === 'ปกติ') continue;
-                        $rows[] = [$status, $fcount, $size, $name];
-                    }
-                }
-                if (!$AS_CSV && count($rows) > 0) {
-                    if (!$site_has_output) {
-                        echo "-------------------------------------------------------\n";
-                        echo " ไซต์: $site\n";
-                        echo "-------------------------------------------------------\n";
-                        $site_has_output = true;
-                    }
-                    echo "  [PLUGIN]\n";
-                    printf("  %-9s %-7s %-9s %s\n", 'สถานะ', 'ไฟล์', 'ขนาด', 'ชื่อ');
-                    foreach ($rows as $r) printf("  %-9s %-7s %-9s %s\n", $r[0], $r[1], $r[2], $r[3]);
-                }
+        $rows = [];
+        foreach ($entries as $d) {
+            $name = basename($d);
+            if (in_array($name, $EXCLUDE, true)) {
+                if (!$AS_CSV && !$ONLY_ISSUES) $rows[] = ['ข้าม', '-', '-', $name, $type];
+                continue;
             }
-        }
-    }
+            $counters[$type]['total']++;
+            $fcount = count_files($d);
+            $bytes  = dir_size($d);
+            $size   = human_size($bytes);
 
-    // ---------- THEMES (ตรวจทุกเว็บ: ต้องมี blocksy + blocksy-child ครบ) ----------
-    if ($DO_THEMES) {
-        $tdir = "$wpc/themes";
-        $blocksy_dir = "$tdir/blocksy";
-        $child_dir   = "$tdir/blocksy-child";
-        $counters['theme']['total']++;
-
-        // blocksy (parent) สมบูรณ์ไหม — เช็คเบา: มีโฟลเดอร์ + style.css ที่มี Theme Name
-        $parent_ok = (is_dir($blocksy_dir) && is_file("$blocksy_dir/style.css")
-            && stripos(@file_get_contents("$blocksy_dir/style.css", false, null, 0, 8192) ?: '', 'Theme Name:') !== false);
-        // blocksy-child สมบูรณ์ไหม
-        $child_ok = (is_dir($child_dir) && is_file("$child_dir/style.css")
-            && stripos(@file_get_contents("$child_dir/style.css", false, null, 0, 8192) ?: '', 'Theme Name:') !== false);
-
-        $issues = [];
-        if (!$parent_ok) $issues[] = 'blocksy (parent) หาย/เสีย';
-        if (!$child_ok)  $issues[] = 'blocksy-child หาย/เสีย';
-
-        $status = empty($issues) ? 'ปกติ' : 'ไม่ครบ';
-        if (!empty($issues)) {
-            $counters['theme']['incomplete'][] = ['name' => implode(' + ', $issues), 'site' => $site, 'files' => 0];
-        }
-
-        if ($AS_CSV) {
-            $detail = empty($issues) ? 'blocksy+child ครบ' : implode('; ', $issues);
-            echo "\"$site\",theme,\"blocksy set\",-,-,$status ($detail)\n";
-        } else {
-            $show = !($ONLY_ISSUES && $status === 'ปกติ');
-            if ($show) {
-                if (!$site_has_output) {
-                    echo "-------------------------------------------------------\n";
-                    echo " ไซต์: $site\n";
-                    echo "-------------------------------------------------------\n";
-                    $site_has_output = true;
-                }
-                echo "  [THEME] ";
-                if (empty($issues)) {
-                    echo "ปกติ — blocksy + blocksy-child ครบ\n";
+            if ($fcount === 0) {
+                $status = 'ว่าง!';
+                $counters[$type]['empty'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
+            } elseif ($type === 'theme' && ($tmpl = get_theme_template($d)) !== null) {
+                // เป็น child theme → เช็คว่าธีมแม่ (Template) ยังอยู่จริงไหม
+                if (parent_theme_ok($container, $tmpl)) {
+                    $status = 'ปกติ';   // child + parent ครบ
                 } else {
-                    echo "ไม่ครบ — " . implode(', ', $issues) . "\n";
+                    $status = 'แม่หาย';  // child กำพร้า: ธีมแม่ "$tmpl" หาย/เสีย → เว็บพัง
+                    $counters[$type]['orphan'][] = ['name' => "$name → แม่: $tmpl", 'site' => $site, 'files' => $fcount];
                 }
+            } elseif ($fcount <= $THRESHOLD) {
+                $status = 'สงสัย';
+                $counters[$type]['suspect'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
+            } elseif (!has_main_header($d, $type)) {
+                $status = 'ไม่มีหลัก';
+                $counters[$type]['nohdr'][] = ['name' => $name, 'site' => $site, 'files' => $fcount];
+            } else {
+                $status = 'ปกติ';
+            }
+
+            if ($AS_CSV) {
+                echo "\"$site\",$type,\"$name\",$fcount,$bytes,$status\n";
+            } else {
+                if ($ONLY_ISSUES && $status === 'ปกติ') continue;
+                $rows[] = [$status, $fcount, $size, $name, $type];
+            }
+        }
+
+        // แสดงผลรายเว็บ (โหมดไม่ใช่ CSV)
+        if (!$AS_CSV && count($rows) > 0) {
+            if (!$site_has_output) {
+                echo "-------------------------------------------------------\n";
+                echo " ไซต์: $site\n";
+                echo "-------------------------------------------------------\n";
+                $site_has_output = true;
+            }
+            echo "  [" . strtoupper($type) . "]\n";
+            printf("  %-9s %-7s %-9s %s\n", 'สถานะ', 'ไฟล์', 'ขนาด', 'ชื่อ');
+            foreach ($rows as $r) {
+                printf("  %-9s %-7s %-9s %s\n", $r[0], $r[1], $r[2], $r[3]);
             }
         }
     }
-
     if (!$AS_CSV && $site_has_output) echo "\n";
 }
 
@@ -354,60 +318,52 @@ if (!$AS_CSV) {
     echo "=======================================================\n";
     echo " จำนวนเว็บที่สแกน       : " . count($wpcontent_dirs) . "\n";
 
-    // นับ "โดเมนที่มีปัญหา" แบบไม่ซ้ำ
+    // นับ "โดเมนที่มีปัญหา" แบบไม่ซ้ำ (เว็บเดียวอาจมีหลายปัญหา นับครั้งเดียว)
     $problem_sites = [];
     $total_issues  = 0;
-    // plugin
-    foreach (['empty', 'nohdr', 'suspect'] as $k) {
-        foreach ($counters['plugin'][$k] as $it) {
-            $problem_sites[$it['site']] = true; $total_issues++;
+    foreach ($types as $subdir => $type) {
+        $keys = ($type === 'theme') ? ['empty', 'nohdr', 'suspect', 'orphan'] : ['empty', 'nohdr', 'suspect'];
+        foreach ($keys as $k) {
+            foreach ($counters[$type][$k] as $it) {
+                $problem_sites[$it['site']] = true;
+                $total_issues++;
+            }
         }
-    }
-    // theme
-    foreach ($counters['theme']['incomplete'] as $it) {
-        $problem_sites[$it['site']] = true; $total_issues++;
     }
     echo " โดเมนที่มีปัญหา       : " . count($problem_sites) . " เว็บ\n";
     echo " รายการปัญหาทั้งหมด    : $total_issues รายการ\n\n";
 
     $any_issue = false;
-
-    // ── สรุป PLUGINS (เดิม) ──
-    if ($DO_PLUGINS) {
-        $c = $counters['plugin'];
+    foreach ($types as $subdir => $type) {
+        $c = $counters[$type];
+        $label = ($type === 'plugin') ? 'ปลั๊กอิน (PLUGINS)' : 'ธีม (THEMES)';
         $ne = count($c['empty']); $nh = count($c['nohdr']); $ns = count($c['suspect']);
-        echo " ── ปลั๊กอิน (PLUGINS) ──\n";
+        echo " ── $label ──\n";
         echo "   ตรวจทั้งหมด     : {$c['total']}\n";
         echo "   ว่างเปล่า       : $ne\n";
         echo "   ไม่มีไฟล์หลัก   : $nh\n";
-        echo "   ไฟล์น้อยผิดปกติ : $ns\n\n";
+        echo "   ไฟล์น้อยผิดปกติ : $ns\n";
+        if ($type === 'theme') {
+            $no = count($c['orphan']);
+            echo "   child แม่หาย    : $no\n";
+            if ($no > 0) $any_issue = true;
+        }
+        echo "\n";
         if ($ne + $nh + $ns > 0) $any_issue = true;
     }
 
-    // ── สรุป THEMES (ใหม่: เช็ค blocksy + child) ──
-    if ($DO_THEMES) {
-        $c = $counters['theme'];
-        $ni = count($c['incomplete']);
-        echo " ── ธีม (THEMES) — ทุกเว็บต้องมี blocksy + blocksy-child ──\n";
-        echo "   เว็บที่ตรวจ       : {$c['total']}\n";
-        echo "   ชุดธีมไม่ครบ      : $ni\n\n";
-        if ($ni > 0) $any_issue = true;
-    }
-
-    // ── รายละเอียด PLUGINS ──
-    if ($DO_PLUGINS) {
-        $c = $counters['plugin'];
+    // รายละเอียดแยกตามชนิด + ประเภทปัญหา
+    foreach ($types as $subdir => $type) {
+        $c = $counters[$type];
+        $tlabel = ($type === 'plugin') ? 'PLUGIN' : 'THEME';
         if (count($c['empty']) > 0)
-            $group_and_print($c['empty'], "** [PLUGIN] โฟลเดอร์ว่างเปล่า (ต้องติดตั้งใหม่) **");
+            $group_and_print($c['empty'], "** [$tlabel] โฟลเดอร์ว่างเปล่า (ต้องติดตั้งใหม่) **");
         if (count($c['nohdr']) > 0)
-            $group_and_print($c['nohdr'], "** [PLUGIN] ไม่มีไฟล์หลัก (ไฟล์เยอะแต่ไฟล์หลักหาย ใช้งานไม่ได้) **");
+            $group_and_print($c['nohdr'], "** [$tlabel] ไม่มีไฟล์หลัก (ไฟล์เยอะแต่ไฟล์หลักหาย ใช้งานไม่ได้) **");
         if (count($c['suspect']) > 0)
-            $group_and_print($c['suspect'], "** [PLUGIN] ไฟล์น้อยผิดปกติ (ควรตรวจเพิ่ม) **");
-    }
-
-    // ── รายละเอียด THEMES ──
-    if ($DO_THEMES && count($counters['theme']['incomplete']) > 0) {
-        $group_and_print($counters['theme']['incomplete'], "** [THEME] ชุดธีม blocksy ไม่ครบ (ทุกเว็บต้องมี blocksy + blocksy-child) **");
+            $group_and_print($c['suspect'], "** [$tlabel] ไฟล์น้อยผิดปกติ (ควรตรวจเพิ่ม) **");
+        if ($type === 'theme' && count($c['orphan']) > 0)
+            $group_and_print($c['orphan'], "** [THEME] child theme กำพร้า (ธีมแม่หาย/เสีย → เว็บอาจพัง) **");
     }
 
     if (!$any_issue) echo " ไม่พบความผิดปกติ plugins/themes ทุกตัวมีไฟล์ครบถ้วน\n\n";
