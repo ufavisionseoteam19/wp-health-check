@@ -132,8 +132,8 @@ function get_theme_template($dir) {
     $head = @file_get_contents($css, false, null, 0, 8192);
     if ($head === false) return null;
     if (stripos($head, 'Theme Name:') === false) return null;
-    // หาบรรทัด Template: xxx
-    if (preg_match('/^\s*Template:\s*(.+)$/mi', $head, $m)) {
+    // หาบรรทัด Template: xxx (รองรับ * หรือช่องว่างนำหน้าในคอมเมนต์ /** */)
+    if (preg_match('/^[\s*]*Template:\s*(.+)$/mi', $head, $m)) {
         return trim($m[1]);
     }
     return null; // มี Theme Name แต่ไม่มี Template = ไม่ใช่ child theme
